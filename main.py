@@ -5,6 +5,11 @@ import models
 from database import engine, SessionLocal
 from sqlalchemy.orm import Session
 
+from llama_index.core import(
+    VectorStoreIndex, SimpleDirectoryReader,
+    StorageContext, load_index_from_storage
+)
+
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine) # create all tables and columns in Postgres
 
@@ -30,12 +35,87 @@ def getdb():
 
 db_dependency = Annotated[Session, Depends(getdb)]
 
+# get index from llama_index
+import urllib.request
+
+def download_file(file_url: str):
+    # download file
+    try:
+        download_result, headers = urllib.request.urlretrieve(url=file_url)
+    except Exception as e:
+        print("Error downloading file:", e)
+        return {"error": str(e)}
+
+    # check download success
+    if isinstance(download_result, dict) and "error" in download_result:
+        print("Download failed:", download_result["error"])
+    else:
+        print("File downloaded successfully")
+
+    return download_result
+
+def generate_index(doc_id:int, file_path: str):
+
+    # parse file
+    documents = SimpleDirectoryReader(input_files=[file_path]).load_data()
+
+    # create index
+    index = VectorStoreIndex.from_documents(documents, insert_batch_size=2048)
+    
+    # persist store in local
+    INDEX_STORE = f'./store/{doc_id}'
+    print('INDEX_STORE:', INDEX_STORE)
+
+    index.storage_context.persist(INDEX_STORE)
+
+    return {'index': index, 'index_path': INDEX_STORE}
+
+import os
+from llama_parse import LlamaParse
+import nest_asyncio; nest_asyncio.apply()
+def generate_index_llama_parse(doc_id:int, file_path: str):
+
+    LLAMA_CLOUD_API_KEY='llx-5GA1VVuB12niXoT5rV5AzNHFsLKWwPTAH62EYe9U8IJCA1ZV'
+    documents = LlamaParse(api_key=LLAMA_CLOUD_API_KEY, result_type="markdown").load_data(file_path)
+
+    # create index
+    index = VectorStoreIndex.from_documents(documents, insert_batch_size=2048)
+    
+    # persist store in local
+    INDEX_STORE = f'./store/{doc_id}'
+    print('INDEX_STORE:', INDEX_STORE)
+
+    index.storage_context.persist(INDEX_STORE)
+
+    return {'index': index, 'index_path': INDEX_STORE}
+
+def load_index_from_storage(index_store: str):
+    # load index from storage
+    storage_context = StorageContext.from_defaults(persist_dir=index_store)
+    index = load_index_from_storage(storage_context)
+    return index
+
 @app.post("/docs/") # the ending slash is important!
 async def create_document(document: DocumentBase, db: db_dependency):
     db_document = models.Documents(title=document.title, image=document.image, type=document.type, url=document.url)
     db.add(db_document)
     db.commit()
     db.refresh(db_document)
+
+    # download document
+    file_path = download_file(db_document.url)
+
+    # generate index
+    index, index_path = generate_index(doc_id=db_document.id, file_path=file_path).values()
+    print(index)
+
+    # query the document
+    query_engine = index.as_query_engine()
+    response = query_engine.query('How much Revenue did Disney earned in 1992 with Consumer Products?')
+
+    print(response)
+    
+    return response
 
 @app.get("/docs/")
 async def list_document(db: db_dependency):
