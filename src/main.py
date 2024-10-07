@@ -45,15 +45,29 @@ def getdb():
 db_dependency = Annotated[Session, Depends(getdb)]
 
 # AUXILIARY FUNCTIONS
-def get_index_from_nodes(type: Literal['SUM', 'VEC'], nodes: List[Document]):
-    """
-    Get index from nodes.
-    type: SUM for SummaryIndex, VEC for VectorStoreIndex.
-    """
+def persist_index(index, path):
+    index.storage_context.persist(path)
+    pass
+
+def load_index(path):
+    storage_context = StorageContext.from_defaults(persist_dir=path)
+    return load_index_from_storage(storage_context)
+
+def get_index(type: Literal['SUM', 'VEC'], nodes: List[Document]):
     if type == 'SUM':
-        index = SummaryIndex(nodes)
+        if os.path.exists("../index/summary_index"):
+            index = load_index("../index/summary_index")
+        else:
+            # get index from nodes + persist
+            index = SummaryIndex(nodes)
+            persist_index(index, "../index/summary_index")
     elif type == 'VEC':
-        index = VectorStoreIndex(nodes)
+        if os.path.exists("../index/vector_index"):
+            index = load_index("../index/vector_index")
+        else:
+            # get index from nodes + persist
+            index = VectorStoreIndex(nodes)
+            persist_index(index, "../index/vector_index")
     return index
 
 async def get_router_query_engine(documents,
@@ -74,23 +88,9 @@ async def get_router_query_engine(documents,
     Settings.embed_model = embed_model
     
     # create index vectors: for summary and query engines
-    summary_index = get_index_from_nodes(type = 'SUM', nodes = nodes)
-    vector_index = get_index_from_nodes(type = 'VEC', nodes = nodes)
-    
-    if os.path.exists("../index/summary_index"):
-        # rebuild storage context
-        storage_context = StorageContext.from_defaults(persist_dir="../index/summary_index")
-        summary_index = load_index_from_storage(storage_context)
-    else:
-        summary_index.storage_context.persist("../index/summary_index")
-    if os.path.exists("../index/vector_index"):
-        # rebuild storage context
-        storage_context = StorageContext.from_defaults(persist_dir="../index/vector_index")
-        vector_index = load_index_from_storage(storage_context)
-    else:
-        vector_index.storage_context.persist("../index/vector_index")
+    summary_index = get_index('SUM', nodes)
+    vector_index = get_index('VEC', nodes)
 
-    # build tools for the query engine (index as engine) + metadata
     summary_tool = QueryEngineTool.from_defaults(
         query_engine=summary_index.as_query_engine(
             response_mode="tree_summarize",
@@ -100,7 +100,7 @@ async def get_router_query_engine(documents,
             "Useful for summarization questions. Use this to answer exploratory questions about the topic, while keeping limited to the content from the document provided, not from external sources."
         ),
     )
-    
+
     vector_tool = QueryEngineTool.from_defaults(
         query_engine=vector_index.as_query_engine(),
         description=(
@@ -128,16 +128,15 @@ import shutil
 from PyPDF2 import PdfReader
 
 @app.post("/docs/")
-async def create_document(file: UploadFile = File(...)):
+async def create_document(upload: UploadFile = File(...)):
     
     # create a temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
-        temp_file_path = os.path.join(temp_dir, file.filename)
-        print('TEMP_DIR', temp_dir, )
+        temp_file_path = os.path.join(temp_dir, upload.filename)
 
         try:
-            # read the file contents
-            contents = file.file.read()
+            # read file contents
+            contents = upload.file.read()
             # create file with the same name inside the temporary directory
             with open(temp_file_path, "wb") as temp_file:
                 # and write the contents to it
@@ -146,18 +145,18 @@ async def create_document(file: UploadFile = File(...)):
             return {"message": "There was an error uploading the file"}
         
         try:
-            # Process the file
+            # process file
             documents = SimpleDirectoryReader(input_dir=temp_dir).load_data()
             query_engine = await get_router_query_engine(documents,
-                                                        #  llm = Groq("llama-3.1-70b-versatile")
+                                                         llm = Groq("llama-3.1-70b-versatile")
                                                          )
         except Exception:
             return {"message": "There was an error generating the query engine"}
         finally:
-            file.file.close()
+            upload.file.close()
             # The file will be automatically deleted when exiting this block
 
-    response = query_engine.query("Please summarize this document")
+    response = query_engine.query("What is the name o the name of the mother?")
     
     return response
 
