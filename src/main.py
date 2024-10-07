@@ -70,9 +70,9 @@ def get_index(type: Literal['SUM', 'VEC'], nodes: List[Document]):
             persist_index(index, "../index/vector_index")
     return index
 
-async def get_router_query_engine(documents,
-                                  llm = OpenAI(model="gpt-3.5-turbo"),
-                                  embed_model = OpenAIEmbedding(model="text-embedding-ada-002")):
+async def get_router_query_engine(documents: List[Document],
+                                  llm: OpenAI = OpenAI(model="gpt-3.5-turbo"),
+                                  embed_model: OpenAIEmbedding = OpenAIEmbedding(model="text-embedding-ada-002")):
     """
     Get router query engine.
     documents is a list of llama_index.core.Document
@@ -145,10 +145,16 @@ async def create_document(upload: UploadFile = File(...)):
             return {"message": "There was an error uploading the file"}
         
         try:
-            # process file
+            # process files from a directory
             documents = SimpleDirectoryReader(input_dir=temp_dir).load_data()
-            query_engine = await get_router_query_engine(documents,
-                                                         llm = Groq("llama-3.1-70b-versatile")
+
+            # process single file
+            # file_content = upload.file.read().decode('utf-8')  # Convert bytes to string if necessary
+            # document = Document(text=file_content, metadata={"filename": upload.filename})
+            # documents = [document]
+
+            query_engine = await get_router_query_engine(documents, # function expects a list (as SimpleDirectoryReader would return),
+                                                        #  llm = Groq("llama-3.1-70b-versatile")
                                                          )
         except Exception:
             return {"message": "There was an error generating the query engine"}
@@ -156,7 +162,7 @@ async def create_document(upload: UploadFile = File(...)):
             upload.file.close()
             # The file will be automatically deleted when exiting this block
 
-    response = query_engine.query("What is the name o the name of the mother?")
+    response = query_engine.query("Please summarize the document")
     
     return response
 
